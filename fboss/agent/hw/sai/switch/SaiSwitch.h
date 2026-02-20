@@ -15,6 +15,7 @@
 #include "fboss/agent/L2Entry.h"
 #include "fboss/agent/hw/HwSwitchFb303Stats.h"
 #include "fboss/agent/hw/gen-cpp2/hardware_stats_types.h"
+#include "fboss/agent/types.h"
 #include "fboss/agent/hw/sai/api/SaiApiTable.h"
 #include "fboss/agent/hw/sai/switch/SaiManagerTable.h"
 #include "fboss/agent/hw/sai/switch/SaiPortManager.h"
@@ -259,6 +260,9 @@ class SaiSwitch : public HwSwitch {
 #if defined(SAI_BRCM_PAI_IMPL)
   static sai_status_t sync_lock();
   static sai_status_t sync_unlock();
+  // Helper functions to set/clear XPHY ID for current thread
+  static void setCurrentXphyIDForThread(GlobalXphyID xphyID);
+  static void clearCurrentXphyIDForThread();
 #endif
 
   std::string listObjects(const std::vector<HwObjectType>& types, bool cached)

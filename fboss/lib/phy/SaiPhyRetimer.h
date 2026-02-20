@@ -14,6 +14,7 @@
 #include "fboss/agent/RxPacket.h"
 #include "fboss/agent/hw/sai/api/SwitchApi.h"
 #include "fboss/agent/hw/sai/api/Types.h"
+#include "fboss/agent/hw/sai/switch/SaiSwitch.h"
 #include "fboss/agent/if/gen-cpp2/ctrl_types.h"
 #include "fboss/agent/if/gen-cpp2/multiswitch_ctrl_types.h"
 #include "fboss/agent/platforms/common/PlatformMapping.h"
@@ -50,6 +51,26 @@ class SaiPhyRetimer : public ExternalPhy, public HwSwitchCallback {
         platformMapping_(platformMapping),
         platform_(platform),
         xphyIO_(xphyIO) {}
+
+  // RAII helper to set/clear XPHY ID for current thread
+  class XphyIDScope {
+   public:
+    explicit XphyIDScope(GlobalXphyID xphyID) : xphyID_(xphyID) {
+      facebook::fboss::SaiSwitch::setCurrentXphyIDForThread(xphyID_);
+    }
+    ~XphyIDScope() {
+      facebook::fboss::SaiSwitch::clearCurrentXphyIDForThread();
+    }
+
+    // Non-copyable, non-movable
+    XphyIDScope(const XphyIDScope&) = delete;
+    XphyIDScope& operator=(const XphyIDScope&) = delete;
+    XphyIDScope(XphyIDScope&&) = delete;
+    XphyIDScope& operator=(XphyIDScope&&) = delete;
+
+   private:
+    GlobalXphyID xphyID_;
+  };
 
   ~SaiPhyRetimer() override = default;
 

@@ -11,6 +11,7 @@
 #include "fboss/agent/hw/sai/switch/SaiSwitch.h"
 #include "fboss/agent/Constants.h"
 #include "fboss/agent/FbossError.h"
+#include "fboss/agent/types.h"
 #include "fboss/agent/LockPolicy.h"
 #include "fboss/agent/Utils.h"
 #include "fboss/agent/ValidateStateUpdate.h"
@@ -87,6 +88,7 @@
 #include <boost/range/combine.hpp>
 #include <chrono>
 #include <optional>
+#include <unordered_map>
 
 extern "C" {
 #include <sai.h>
@@ -173,9 +175,35 @@ static std::set<facebook::fboss::cfg::PacketRxReason> kAllowedRxReasons = {
 } // namespace
 
 namespace {
-// This global mutex is used to provide thread-safe callbacks to the
+// Thread-local storage for current XPHY ID being operated on
+thread_local std::optional<facebook::fboss::GlobalXphyID> gCurrentXphyID;
+
+// Mutex map for each XPHY to provide thread-safe callbacks to the
 // Broadcom PAI implementation for PHY operations.
-std::mutex gBrcmPaiPhySyncMutex;
+std::unordered_map<facebook::fboss::GlobalXphyID, std::unique_ptr<std::mutex>> gBrcmPaiPhySyncMutexes;
+std::mutex gBrcmPaiPhySyncMutexesMutex; // Protects the mutex map
+
+// Helper function to get or create mutex for a specific XPHY
+std::mutex& getXphyMutex(facebook::fboss::GlobalXphyID xphyID) {
+  std::lock_guard<std::mutex> mapLock(gBrcmPaiPhySyncMutexesMutex);
+
+  auto& xphyMutex = gBrcmPaiPhySyncMutexes[xphyID];
+  if (!xphyMutex) {
+    xphyMutex = std::make_unique<std::mutex>();
+    XLOG(DBG3) << "Created PAI sync mutex for XPHY " << static_cast<int>(xphyID);
+  }
+  return *xphyMutex;
+}
+
+// Helper function to set current XPHY ID for this thread
+void setCurrentXphyID(facebook::fboss::GlobalXphyID xphyID) {
+  gCurrentXphyID = xphyID;
+}
+
+// Helper function to clear current XPHY ID for this thread
+void clearCurrentXphyID() {
+  gCurrentXphyID.reset();
+}
 } // namespace
 
 namespace facebook::fboss {
@@ -303,17 +331,42 @@ void __gSwitchAsicSdkHealthNotificationCallBack(
 
 #if defined(SAI_BRCM_PAI_IMPL)
 sai_status_t SaiSwitch::sync_lock() {
-  XLOG(DBG2) << "PAI Sync Lock acquired by thread "
-             << std::this_thread::get_id();
-  gBrcmPaiPhySyncMutex.lock();
+  if (!gCurrentXphyID.has_value()) {
+    XLOG(ERR) << "PAI Sync Lock failed: No XPHY ID set for current thread "
+              << std::this_thread::get_id();
+    return SAI_STATUS_FAILURE;
+  }
+
+  GlobalXphyID xphyID = gCurrentXphyID.value();
+  XLOG(DBG2) << "PAI Sync Lock acquired for XPHY " << static_cast<int>(xphyID)
+             << " by thread " << std::this_thread::get_id();
+
+  getXphyMutex(xphyID).lock();
   return SAI_STATUS_SUCCESS;
 }
 
 sai_status_t SaiSwitch::sync_unlock() {
-  XLOG(DBG2) << "PAI Sync Unlock released by thread "
-             << std::this_thread::get_id();
-  gBrcmPaiPhySyncMutex.unlock();
+  if (!gCurrentXphyID.has_value()) {
+    XLOG(ERR) << "PAI Sync Unlock failed: No XPHY ID set for current thread "
+              << std::this_thread::get_id();
+    return SAI_STATUS_FAILURE;
+  }
+
+  GlobalXphyID xphyID = gCurrentXphyID.value();
+  XLOG(DBG2) << "PAI Sync Unlock released for XPHY " << static_cast<int>(xphyID)
+             << " by thread " << std::this_thread::get_id();
+
+  getXphyMutex(xphyID).unlock();
   return SAI_STATUS_SUCCESS;
+}
+
+// Helper functions to set/clear XPHY ID for current thread
+void SaiSwitch::setCurrentXphyIDForThread(GlobalXphyID xphyID) {
+  ::setCurrentXphyID(xphyID);
+}
+
+void SaiSwitch::clearCurrentXphyIDForThread() {
+  ::clearCurrentXphyID();
 }
 #endif
 
