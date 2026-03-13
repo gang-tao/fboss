@@ -15,6 +15,8 @@
 #include <sys/ioctl.h>
 #include <cerrno>
 #include <cstdint>
+#include <cstdlib>
+#include <mutex>
 #include "fboss/mdio/MdioError.h"
 
 namespace {
@@ -34,6 +36,28 @@ using mdio_access_req_t = struct mdio_access_req_t {
 #define MDIO_ACCESS_REGRD _IOW('F', 2, mdio_access_req_t)
 #define MDIO_ACCESS_REGWR _IOW('F', 1, mdio_access_req_t)
 
+#if 0
+// Mutex to protect ioctl access
+static std::mutex ioctl_mutex;
+
+
+// Helper to check env var once, and log the status.
+static bool isMdioLockingEnabled() {
+  // This static variable will be initialized only once during the first call.
+  static const bool enabled = [] {
+    bool lockEnabled = (std::getenv("FBOSS_MDIO_LOCK_ENABLED") != nullptr);
+    if (lockEnabled) {
+      XLOG(INFO)
+          << "BspDeviceMdio: IOCTL locking is ENABLED via FBOSS_MDIO_LOCK_ENABLED env var.";
+    } else {
+      XLOG(INFO)
+          << "BspDeviceMdio: IOCTL locking is DISABLED. Set FBOSS_MDIO_LOCK_ENABLED=1 to enable.";
+    }
+    return lockEnabled;
+  }();
+  return enabled;
+}
+#endif
 } // namespace
 
 namespace facebook::fboss {
@@ -101,6 +125,12 @@ phy::Cl45Data BspDeviceMdio::cl45Operation(
     phy::Cl45DeviceAddress devAddr,
     phy::Cl45RegisterAddress regAddr,
     phy::Cl45Data data) {
+  // Conditionally lock based on environment variable
+  //std::unique_lock<std::mutex> lock(ioctl_mutex, std::defer_lock);
+  //if (isMdioLockingEnabled()) {
+  //  lock.lock();
+  //}
+
   struct mdio_access_req_t req;
   int err;
 

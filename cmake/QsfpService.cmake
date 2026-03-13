@@ -55,6 +55,11 @@ target_link_libraries(qsfp_config
   FBThrift::thriftcpp2
 )
 
+set_target_properties(
+  qsfp_config
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(bsp_platform_mapping
   fboss/lib/bsp/BspPlatformMapping.cpp
 )
@@ -62,6 +67,11 @@ add_library(bsp_platform_mapping
 target_link_libraries(bsp_platform_mapping
   bsp_platform_mapping_cpp2
   FBThrift::thriftcpp2
+)
+
+set_target_properties(
+  bsp_platform_mapping
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(meru400bfu_bsp
@@ -296,6 +306,11 @@ target_link_libraries(qsfp_bsp_core
   led_mapping_cpp2
 )
 
+set_target_properties(
+  qsfp_bsp_core
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(transceiver_validator
   fboss/qsfp_service/TransceiverValidator.cpp
 )
@@ -338,6 +353,11 @@ target_link_libraries(transceiver_manager
   restart_time_tracker
 )
 
+set_target_properties(
+  transceiver_manager
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(port_manager STATIC
     fboss/qsfp_service/PortManager.cpp
     fboss/qsfp_service/PortStateMachine.cpp
@@ -360,6 +380,11 @@ target_link_libraries(port_manager
   restart_time_tracker
 )
 
+set_target_properties(
+  port_manager
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(qsfp_handler
   fboss/qsfp_service/QsfpServiceHandler.cpp
 )
@@ -374,6 +399,11 @@ target_link_libraries(qsfp_handler
   fsdb_flags
 )
 
+set_target_properties(
+  qsfp_handler
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(qsfp_core
   fboss/qsfp_service/QsfpServer.cpp
   fboss/qsfp_service/QsfpServiceSignalHandler.cpp
@@ -383,6 +413,11 @@ add_library(qsfp_core
 target_link_libraries(qsfp_core
   qsfp_handler
   thrift_service_utils
+)
+
+set_target_properties(
+  qsfp_core
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 set(QSFP_SERVICE_SRCS

@@ -96,6 +96,7 @@ elseif (CHENAB_SAI_SDK)
     fboss/agent/hw/sai/switch/oss/SaiFirmwareManager.cpp
   )
 elseif (SAI_BRCM_PAI_IMPL)
+  list(REMOVE_ITEM SAI_SWITCH_SRC "fboss/agent/hw/sai/switch/npu/SaiPortManager.cpp")	
   list(APPEND SAI_SWITCH_SRC
     fboss/agent/hw/sai/switch/phy/SaiAclTableManager.cpp
     fboss/agent/hw/sai/switch/phy/SaiPortManager.cpp
@@ -156,6 +157,33 @@ target_link_libraries(sai_switch
   ${GTEST}
   ${LIBGMOCK_LIBRARIES}
   -Wl,--unresolved-symbols=report-all
+)
+
+set_source_files_properties(
+  fboss/agent/hw/sai/switch/SaiArsManager.cpp
+  fboss/agent/hw/sai/switch/SaiArsProfileManager.cpp
+  fboss/agent/hw/sai/switch/SaiNextHopGroupManager.cpp
+  fboss/agent/hw/sai/switch/SaiPortManager.cpp
+  fboss/agent/hw/sai/switch/SaiPortUtils.cpp
+  fboss/agent/hw/sai/switch/SaiSwitch.cpp
+  fboss/agent/hw/sai/switch/SaiSwitchManager.cpp
+  fboss/agent/hw/sai/switch/npu/SaiPortManager.cpp
+  fboss/agent/hw/sai/switch/npu/SaiSwitch.cpp
+  fboss/agent/hw/sai/switch/npu/bcm/SaiArsManager.cpp
+  fboss/agent/hw/sai/switch/npu/bcm/SaiSwitch.cpp
+  fboss/agent/hw/sai/switch/npu/bcm/SaiPortManager.cpp
+  fboss/agent/hw/sai/switch/npu/bcm/SaiSwitchManager.cpp
+  fboss/agent/hw/sai/switch/npu/bcm/oss/SaiSwitchManager.cpp
+  fboss/agent/hw/sai/switch/oss/SaiArsProfileManager.cpp
+  fboss/agent/hw/sai/switch/oss/SaiSwitch.cpp
+  fboss/agent/hw/sai/switch/oss/SaiPortManager.cpp
+  fboss/agent/hw/sai/switch/oss/SaiSwitchManager.cpp
+  fboss/agent/hw/sai/switch/SaiRouterInterfaceManager.cpp
+  fboss/agent/hw/sai/switch/SaiVlanManager.cpp
+  fboss/agent/hw/sai/switch/SaiRouteManager.cpp
+  fboss/agent/hw/sai/switch/SaiManagerTable.cpp
+  fboss/agent/hw/sai/switch/phy/SaiPortManager.cpp
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 set_target_properties(sai_switch PROPERTIES COMPILE_FLAGS

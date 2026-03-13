@@ -173,6 +173,8 @@ static std::set<facebook::fboss::cfg::PacketRxReason> kAllowedRxReasons = {
 
 } // namespace
 
+
+
 namespace facebook::fboss {
 
 // We need this global SaiSwitch* to support registering SAI callbacks
@@ -295,6 +297,8 @@ void __gSwitchAsicSdkHealthNotificationCallBack(
   ;
 }
 #endif
+
+
 
 PortSaiId SaiSwitch::getCPUPortSaiId() const {
   if (!platform_->getAsic()->isSupported(HwAsic::Feature::CPU_PORT)) {

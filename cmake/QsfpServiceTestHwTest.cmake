@@ -18,6 +18,11 @@ target_link_libraries(hw_qsfp_ensemble
   qsfp_platforms_wedge
 )
 
+set_target_properties(
+  hw_qsfp_ensemble
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(hw_transceiver_utils
   fboss/qsfp_service/test/hw_test/HwTransceiverUtils.cpp
 )
@@ -29,6 +34,11 @@ target_link_libraries(hw_transceiver_utils
   switch_config_cpp2
   transceiver_cpp2
   transceiver_manager
+)
+
+set_target_properties(
+  hw_transceiver_utils
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 set(QSFP_HW_TEST_SRCS
@@ -49,6 +59,26 @@ set(QSFP_HW_TEST_SRCS
   fboss/qsfp_service/test/hw_test/HwTransceiverTest.cpp
   fboss/qsfp_service/test/hw_test/OpticsFwUpgradeTest.cpp
   fboss/util/oss/TestMain.cpp
+)
+
+set_source_files_properties(
+  fboss/qsfp_service/test/hw_test/EmptyHwTest.cpp
+  fboss/qsfp_service/test/hw_test/HwXphyFirmwareTest.cpp
+  fboss/qsfp_service/test/hw_test/HwPimTest.cpp
+  fboss/qsfp_service/test/hw_test/HwPortProfileTest.cpp
+  fboss/qsfp_service/test/hw_test/HwPortUtils.cpp
+  fboss/qsfp_service/test/hw_test/HwTransceiverConfigTest.cpp
+  fboss/qsfp_service/test/hw_test/HwStatsCollectionTest.cpp
+  fboss/qsfp_service/test/hw_test/HwTest.cpp
+  fboss/qsfp_service/test/hw_test/HwTransceiverResetTest.cpp
+  fboss/qsfp_service/test/hw_test/HwExternalPhyPortTest.cpp
+  fboss/qsfp_service/test/hw_test/HwPortPrbsTest.cpp
+  fboss/qsfp_service/test/hw_test/HwI2CStressTest.cpp
+  fboss/qsfp_service/test/hw_test/HwI2cSelectTest.cpp
+  fboss/qsfp_service/test/hw_test/HwStateMachineTest.cpp
+  fboss/qsfp_service/test/hw_test/HwTransceiverTest.cpp
+  fboss/qsfp_service/test/hw_test/OpticsFwUpgradeTest.cpp
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 set(QSFP_HW_TEST_DEPS

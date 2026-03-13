@@ -10,6 +10,7 @@
 
 #include "fboss/lib/phy/SaiPhyRetimer.h"
 
+#include <cstdlib>
 #include <folly/logging/xlog.h>
 #include <thrift/lib/cpp/util/EnumUtils.h>
 #include "fboss/agent/FbossError.h"
@@ -24,6 +25,47 @@
 namespace facebook::fboss::phy {
 
 namespace {
+
+#if defined(SAI_BRCM_PAI_IMPL)
+// Global mutex for fallback, controlled by environment variable
+std::mutex gPaiGlobalMutex;
+
+sai_status_t pai_lock_callback(uint64_t platform_context) {
+  static const char* use_global_lock_env =
+      std::getenv("FBOSS_PAI_USE_GLOBAL_LOCK");
+  if (use_global_lock_env && std::strcmp(use_global_lock_env, "1") == 0) {
+    gPaiGlobalMutex.lock();
+    XLOG(DBG5) << "PAI Sync Lock acquired (GLOBAL)";
+  } else {
+    if (platform_context == 0) {
+      XLOG(ERR) << "PAI lock callback invoked with a null context.";
+      return SAI_STATUS_FAILURE;
+    }
+    auto* retimer = reinterpret_cast<SaiPhyRetimer*>(platform_context);
+    retimer->getPaiMutex().lock();
+    XLOG(DBG5) << "PAI Sync Lock acquired for xphy:" << retimer->getPhyAddr();
+  }
+  return SAI_STATUS_SUCCESS;
+}
+
+sai_status_t pai_unlock_callback(uint64_t platform_context) {
+  static const char* use_global_lock_env =
+      std::getenv("FBOSS_PAI_USE_GLOBAL_LOCK");
+  if (use_global_lock_env && std::strcmp(use_global_lock_env, "1") == 0) {
+    gPaiGlobalMutex.unlock();
+    XLOG(DBG5) << "PAI Sync Lock released (GLOBAL)";
+  } else {
+    if (platform_context == 0) {
+      // This might happen on a failed lock, so don't log an error
+      return SAI_STATUS_SUCCESS;
+    }
+    auto* retimer = reinterpret_cast<SaiPhyRetimer*>(platform_context);
+    retimer->getPaiMutex().unlock();
+    XLOG(DBG5) << "PAI Sync Lock released for xphy:" << retimer->getPhyAddr();
+  }
+  return SAI_STATUS_SUCCESS;
+}
+#endif
 
 FecMode getFecMode(sai_port_fec_mode_t fec, cfg::PortSpeed /* speed */) {
   if (fec == SAI_PORT_FEC_MODE_NONE) {
@@ -321,6 +363,10 @@ SaiSwitchTraits::CreateAttributes SaiPhyRetimer::getSwitchAttributes() {
 #endif
       std::nullopt, // enable PFC monitoring for the switch
       std::nullopt, // enable cable propagation delay measurement
+#if defined(SAI_BRCM_PAI_IMPL)
+      (sai_pointer_t)pai_lock_callback, // user sync_lock for pai
+      (sai_pointer_t)pai_unlock_callback, // user sync_unlock for pai
+#endif
   };
 }
 

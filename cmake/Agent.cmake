@@ -63,6 +63,11 @@ target_link_libraries(hw_switch_handler
   hw_write_behavior
 )
 
+set_target_properties(
+  hw_switch_handler
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(monolithic_switch_handler
   fboss/agent/single/MonolithicHwSwitchHandler.cpp
 )
@@ -169,6 +174,11 @@ target_link_libraries(utils
   icetea800bc_platform_mapping
   tahansb800bc_platform_mapping
   ladakh800bcls_platform_mapping
+)
+
+set_target_properties(
+  utils
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(stats
@@ -343,6 +353,11 @@ add_library(core
   fboss/agent/oss/RouteUpdateLogger.cpp
   fboss/agent/oss/SwSwitch.cpp
   fboss/agent/FsdbSyncer.cpp
+)
+
+set_target_properties(
+  core
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(
@@ -653,6 +668,10 @@ target_link_libraries(multiswitch_service
   state
   packet
 )
+set_target_properties(
+  multiswitch_service
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
 
 add_library(route_update_wrapper
   fboss/agent/RouteUpdateWrapper.cpp
@@ -689,6 +708,11 @@ target_link_libraries(split_agent_thrift_syncer
   hw_switch
 )
 
+set_target_properties(
+  split_agent_thrift_syncer
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(load_agent_config
     fboss/agent/AgentConfig.cpp
 )
@@ -700,6 +724,10 @@ target_link_libraries(load_agent_config
   Folly::folly
 )
 
+set_target_properties(
+  load_agent_config
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
 
 add_library(fboss_common_init
   fboss/agent/CommonInit.cpp
@@ -712,6 +740,11 @@ target_link_libraries(fboss_common_init
   platform_base
   Folly::folly
   fb303::fb303
+)
+
+set_target_properties(
+  fboss_common_init
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(monolithic_agent_initializer
@@ -733,6 +766,11 @@ target_link_libraries(monolithic_agent_initializer
   Folly::folly
 )
 
+set_target_properties(
+  monolithic_agent_initializer
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(multi_switch_hw_switch_handler
   fboss/agent/mnpu/MultiSwitchHwSwitchHandler.cpp
 )
@@ -746,6 +784,11 @@ target_link_libraries(multi_switch_hw_switch_handler
   hw_switch_handler
 )
 
+set_target_properties(
+  multi_switch_hw_switch_handler
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(split_agent_initializer
   fboss/agent/mnpu/SplitSwAgentInitializer.cpp
 )
@@ -755,6 +798,11 @@ target_link_libraries(split_agent_initializer
   sw_agent_initializer
   multiswitch_service
   multi_switch_hw_switch_handler
+)
+
+set_target_properties(
+  split_agent_initializer
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(agent_dir_util
@@ -832,6 +880,11 @@ target_link_libraries(sw_agent_initializer
   handler
   setup_thrift
   utils
+)
+
+set_target_properties(
+  sw_agent_initializer
+  PROPERTIES COMPILE_FLAGS "-g -O0"
 )
 
 add_library(agent_netwhoami

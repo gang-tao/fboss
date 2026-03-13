@@ -44,8 +44,14 @@ if (SAI_BRCM_PAI_IMPL)
   add_library(sai_xphy
     "${SAI_XPHY_SRC}"
   )
+
   target_link_libraries(sai_xphy
     "${SAI_XPHY_DEPS}"
+  )
+
+  set_target_properties(
+    sai_xphy
+    PROPERTIES COMPILE_FLAGS "-g -O0"
   )
 
   set(SAI_PHY_MANAGEMENT_SRC
@@ -70,6 +76,11 @@ if (SAI_BRCM_PAI_IMPL)
   target_link_libraries(sai_phy_management
     "${SAI_PHY_MANAGEMENT_DEPS}"
   )
+
+  set_target_properties(
+    sai_phy_management
+    PROPERTIES COMPILE_FLAGS "-g -O0"
+  )
 endif()
 
 add_library(phy_management_base
@@ -88,6 +99,11 @@ target_link_libraries(phy_management_base
   fpga_multi_pim_container
 )
 
+set_target_properties(
+  phy_management_base
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(phy_utils
   fboss/lib/phy/PhyUtils.cpp
 )
@@ -95,3 +111,9 @@ add_library(phy_utils
 target_link_libraries(phy_utils
   phy_cpp2
 )
+
+set_target_properties(
+  phy_utils
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+

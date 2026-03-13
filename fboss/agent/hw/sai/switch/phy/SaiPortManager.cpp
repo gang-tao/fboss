@@ -24,6 +24,7 @@
 #include "thrift/lib/cpp/util/EnumUtils.h"
 
 #include <folly/logging/xlog.h>
+#include <cstdlib>
 
 DEFINE_bool(
     enable_xphy_link_training,
@@ -253,6 +254,19 @@ SaiPortTraits::CreateAttributes SaiPortManager::attributesFromSwPort(
   }
   XLOG(DBG2) << dbgOutput;
 
+  std::optional<bool> linkTrainingEnable = std::nullopt;
+  const char* envVar = std::getenv("FBOSS_ENABLE_LINK_TRAINING");
+  if (envVar) {
+    std::string envVal(envVar);
+    if (envVal == "1" || envVal == "true") {
+      linkTrainingEnable = true;
+    }
+  }
+  if (linkTrainingEnable == true) {
+    XLOG(DBG2) << "Gangtao link training true"; 
+  } else {
+    XLOG(DBG2) << "Gangtao link training false"; 
+  }
   return SaiPortTraits::CreateAttributes{
       laneList,
       static_cast<uint32_t>(speed),
@@ -299,10 +313,14 @@ SaiPortTraits::CreateAttributes SaiPortManager::attributesFromSwPort(
 #if SAI_API_VERSION >= SAI_VERSION(1, 9, 0)
       std::nullopt,
 #endif
+#if 0
       FLAGS_enable_xphy_link_training
           ? std::make_optional<SaiPortTraits::Attributes::LinkTrainingEnable>(
                 true)
           : std::nullopt, // Link Training Enable
+#else
+      linkTrainingEnable, //true, // Link Training Enable
+#endif
       std::nullopt, // FDR Enable
       std::nullopt, // Rx Squelch Enable
 #if SAI_API_VERSION >= SAI_VERSION(1, 10, 2)

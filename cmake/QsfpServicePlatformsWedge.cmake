@@ -67,6 +67,11 @@ target_link_libraries(qsfp_platforms_wedge
   wedge_i2c
 )
 
+set_target_properties(
+  qsfp_platforms_wedge
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 if(SAI_BRCM_PAI_IMPL)
   target_link_libraries(qsfp_platforms_wedge
     sai_phy_management

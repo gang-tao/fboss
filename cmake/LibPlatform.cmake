@@ -15,6 +15,11 @@ target_link_libraries(product_info
   fboss_error
 )
 
+set_target_properties(
+  product_info 
+  PROPERTIES COMPILE_FLAGS "-g -O0"
+)
+
 add_library(platform_mode
   fboss/lib/platforms/PlatformMode.h
 )
