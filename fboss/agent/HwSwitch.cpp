@@ -233,6 +233,9 @@ void HwSwitch::updateAllPhyInfo() {
   auto now =
       std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   if (now - phyInfoUpdateTime_ >= FLAGS_update_phy_info_interval_s) {
+    XLOG(INFO) << "[xphy_debug] HwSwitch::updateAllPhyInfo: RUNNING impl, "
+               << "interval=" << FLAGS_update_phy_info_interval_s
+               << " elapsed=" << (now - phyInfoUpdateTime_);
     phyInfoUpdateTime_ = now;
     try {
       *lastPhyInfo_.wlock() = updateAllPhyInfoImpl();
@@ -241,6 +244,10 @@ void HwSwitch::updateAllPhyInfo() {
       XLOG(ERR) << "Error running updateAllPhyInfo: "
                 << folly::exceptionStr(ex);
     }
+  } else {
+    XLOG(INFO) << "[xphy_debug] HwSwitch::updateAllPhyInfo: THROTTLED, "
+               << "elapsed=" << (now - phyInfoUpdateTime_)
+               << " interval=" << FLAGS_update_phy_info_interval_s;
   }
 }
 

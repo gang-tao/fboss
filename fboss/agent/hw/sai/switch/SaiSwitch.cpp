@@ -2309,25 +2309,32 @@ std::map<PortID, phy::PhyInfo> SaiSwitch::updateAllPhyInfoLocked() {
     lastSerdesParamsReadTime_ = now.count();
   }
 
+  size_t totalPortsInMgr = std::distance(
+      managerTable_->portManager().begin(),
+      managerTable_->portManager().end());
+  XLOG(INFO) << "[xphy_debug] updateAllPhyInfoLocked: switchId="
+             << getSaiSwitchId() << " totalPortsInMgr=" << totalPortsInMgr;
+
   for (const auto& portIdAndHandle : managerTable_->portManager()) {
     PortID portID = portIdAndHandle.first;
-    if (portManager.getPortType(portID) == cfg::PortType::INTERFACE_PORT ||
-        portManager.getPortType(portID) == cfg::PortType::FABRIC_PORT ||
-        portManager.getPortType(portID) == cfg::PortType::MANAGEMENT_PORT ||
-        portManager.getPortType(portID) == cfg::PortType::HYPER_PORT_MEMBER) {
+    auto portType = portManager.getPortType(portID);
+    if (portType == cfg::PortType::INTERFACE_PORT ||
+        portType == cfg::PortType::FABRIC_PORT ||
+        portType == cfg::PortType::MANAGEMENT_PORT ||
+        portType == cfg::PortType::HYPER_PORT_MEMBER) {
       auto portHandle = portIdAndHandle.second.get();
       if (portHandle == nullptr) {
-        XLOG(DBG3) << "PortHandle not found for port "
-                   << static_cast<int>(portID);
+        XLOG(INFO) << "[xphy_debug] PortHandle null for port " << portID;
         continue;
       }
 
       auto fb303PortStat = portManager.getLastPortStat(portID);
       if (fb303PortStat == nullptr) {
-        XLOG(DBG3) << "fb303PortStat not found for port "
-                   << static_cast<int>(portID);
+        XLOG(INFO) << "[xphy_debug] fb303PortStat null for port " << portID;
         continue;
       }
+      XLOG(INFO) << "[xphy_debug] processing port " << portID << " name="
+                 << fb303PortStat->portName();
 
       phy::PhyInfo lastPhyInfo;
       if (auto itr = lastPhyInfos_.find(portID); itr != lastPhyInfos_.end()) {
@@ -2422,8 +2429,16 @@ std::map<PortID, phy::PhyInfo> SaiSwitch::updateAllPhyInfoLocked() {
       phyParams.state()->timeCollected() = now.count();
       phyParams.stats()->timeCollected() = now.count();
       returnPhyParams[portID] = phyParams;
+      XLOG(INFO) << "[xphy_debug] port " << portID << " ("
+                 << *fb303PortStat->portName()
+                 << ") DONE, isXphy=" << isXphy;
+    } else {
+      XLOG(INFO) << "[xphy_debug] skip port " << portID
+                 << " wrong type=" << apache::thrift::util::enumNameSafe(portType);
     }
   }
+  XLOG(INFO) << "[xphy_debug] updateAllPhyInfoLocked DONE: switchId="
+             << getSaiSwitchId() << " resultPorts=" << returnPhyParams.size();
   lastPhyInfos_ = returnPhyParams;
   return returnPhyParams;
 }

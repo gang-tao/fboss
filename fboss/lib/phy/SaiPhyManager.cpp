@@ -112,22 +112,25 @@ void SaiPhyManager::collectXphyStats(
     GlobalXphyID xphyID,
     PlatformInfo* platformInfo) {
   try {
-    if (!platformInfo->getHwSwitch() ||
-        !platformInfo->getHwSwitch()->isFullyConfigured()) {
-      XLOG(WARN) << "Skipping xphy stats collection for xphy " << xphyID
-                 << " as it's not fully configured";
+    auto* hwSwitch = platformInfo->getHwSwitch();
+    if (!hwSwitch || !hwSwitch->isFullyConfigured()) {
+      XLOG(INFO) << "[xphy_debug] collectXphyStats SKIP xphy=" << xphyID
+                 << " hasHw=" << (hwSwitch != nullptr)
+                 << " configured=" << (hwSwitch ? hwSwitch->isFullyConfigured() : false);
       return;
     }
-    platformInfo->getHwSwitch()->updateStats();
-    platformInfo->getHwSwitch()->updateAllPhyInfo();
-    auto phyInfos = platformInfo->getHwSwitch()->getAllPhyInfo();
+    hwSwitch->updateStats();
+    hwSwitch->updateAllPhyInfo();
+    auto phyInfos = hwSwitch->getAllPhyInfo();
+    XLOG(INFO) << "[xphy_debug] collectXphyStats xphy=" << xphyID
+               << " switchId=" << hwSwitch->getSaiSwitchId()
+               << " phyInfoCount=" << phyInfos.size();
     for (auto& [portId, phyInfo] : phyInfos) {
       updateXphyInfo(portId, std::move(phyInfo));
     }
   } catch (const std::exception& e) {
-    XLOG(INFO) << "Stats collection failed on : " << "switch: "
-               << platformInfo->getHwSwitch()->getSaiSwitchId()
-               << " xphy: " << xphyID << " error: " << e.what();
+    XLOG(INFO) << "[xphy_debug] collectXphyStats FAILED xphy=" << xphyID
+               << " error=" << e.what();
   }
 }
 
