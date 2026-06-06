@@ -1,0 +1,555 @@
+ ↑ Opus now defaults to 1M context · 5x more room, same pricing
+
+❯ 在跑link test : sai_multi_link_test-sa_impl的case AgentEnsembleLinkTest.xPhyInfoTest，结果出现
+Value of phyInfo.has_value()
+ Actural:false
+Expected:true
+eth1/3/1 has no xphy info
+这是什么原因，有问题可以问我。
+
+● 让我先找到相关的测试代码和 xPhyInfo 的实现。
+
+  Searched for 4 patterns, read 3 files (ctrl+o to expand)
+
+● 让我进一步查看 getXphyCabledPorts 和 qsfp_service 中 getXphyInfo 的实现。
+
+  Searched for 4 patterns (ctrl+o to expand)
+
+● 现在让我看看 qsfp_service 端 getXphyInfo 的实现，了解什么情况下会抛异常。
+
+  Searched for 11 patterns, read 3 files (ctrl+o to expand)
+
+● 现在让我追踪 xphy info 是如何被采集和更新的。
+
+  Searched for 3 patterns, read 1 file (ctrl+o to expand)
+
+● 现在让我看看 SAI 实现相关的代码，因为测试名是 sai_multi_link_test-sa_impl。
+
+  Searched for 12 patterns, read 1 file (ctrl+o to expand)
+
+● 现在我对整个数据流有了清晰的了解。下面是我的分析：
+
+  ---
+  分析：eth1/3/1 has no xphy info 的原因
+
+  数据流路径
+
+  测试端 (agent)                        qsfp_service 端
+  ──────────────                        ─────────────────
+  getXphyCabledPorts()
+    → utility::getPortExternalPhyID()
+      (判断端口是否有 XPHY)
+
+  getXphyInfo(portID)  ──Thrift──→     PortManager::getXphyInfo(portID)
+                                         → PhyManager::getXphyInfo(portID)
+                                           → xphySnapshotManager_->getPhyInfo(portID)
+                                             → 从 snapshots_ map 中查找
+                                             → 找不到或 RingBuffer 为空 → nullopt
+                                       ↑
+                                       数据由以下流程填充：
+                                       SaiPhyManager::updateAllXphyPortsStats()
+                                         → collectXphyStats()
+                                           → isFullyConfigured()?
+                                           → updateAllPhyInfo()  ← 有节流！
+                                           → getAllPhyInfo() → updateXphyInfo()
+
+  可能的原因（按可能性排序）
+
+  1. HwSwitch::updateAllPhyInfo() 被时间间隔过滤掉了（最可能）
+
+  在 HwSwitch.cpp:231，updateAllPhyInfo() 有一个节流机制：
+  if (now - phyInfoUpdateTime_ >= FLAGS_update_phy_info_interval_s) {
+      // 只有超过间隔才真正更新
+      *lastPhyInfo_.wlock() = updateAllPhyInfoImpl();
+  }
+  如果 FLAGS_update_phy_info_interval_s 设置比较长，在测试的 retry 窗口内（24 * 5s = 120s）可能还没来得及更新。
+
+  2. isFullyConfigured() 返回 false
+
+  SaiPhyManager::collectXphyStats() 中（line 116-120）：
+  if (!platformInfo->getHwSwitch() ||
+      !platformInfo->getHwSwitch()->isFullyConfigured()) {
+      XLOG(WARN) << "Skipping xphy stats collection...";
+      return;
+  }
+  如果 eth1/3/1 对应的 xphy 所在的 HwSwitch 还没 fully configured，就会直接跳过。
+
+  3. getAllPhyInfo() 返回的结果里没有 eth1/3/1
+
+  SaiSwitch::updateAllPhyInfoLocked() 只处理 portManager 中类型为 INTERFACE_PORT/FABRIC_PORT/MANAGEMENT_PORT/HYPER_PORT_MEMBER
+  的端口（line 2314-2317）。
+
+  4. collectXphyStats 抛出异常被静默捕获
+
+  line 127-131，异常只打 INFO 日志，不会重试。
+
+  ---
+  建议排查步骤
+
+  1. 看一下 qsfp_service 的日志，搜索 eth1/3/1 和 Skipping xphy stats collection、Stats collection failed 关键字
+  2. 确认 FLAGS_update_phy_info_interval_s 的值，以及 kXphySnapshotIntervalSeconds（是 10s）
+  3. 确认 eth1/3/1 对应的 xphy HwSwitch 是否 isFullyConfigured()
+
+  你能在测试环境的日志里看到什么相关信息吗？比如 qsfp_service 侧有没有关于 eth1/3/1 的 WARN/ERR 日志？
+
+✻ Churned for 5m 58s
+
+❯ collectXphyStats应该是周期的吧，只要后来full configured了就能成功，对吧
+
+● 对，让我确认一下它的周期性调用路径。
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● 没错，collectXphyStats 是周期的。来看关键代码：
+
+  Main.cpp:94-97:
+  scheduler->addFunction(
+      [&handler]() { handler->updateAllXphyPortsStats(); },
+      std::chrono::seconds(FLAGS_xphy_stats_loop_interval),
+      "updateAllXphyPortsStats");
+
+  所以即使某次 isFullyConfigured() 为 false 跳过了，下一个周期会重试。问题是：即使 isFullyConfigured() 返回 true
+  了，还有一个节流点在 HwSwitch::updateAllPhyInfo() 里：
+
+  // HwSwitch.cpp:231
+  void HwSwitch::updateAllPhyInfo() {
+    auto now = std::chrono::system_clock::to_time_t(...);
+    if (now - phyInfoUpdateTime_ >= FLAGS_update_phy_info_interval_s) {
+      phyInfoUpdateTime_ = now;
+      *lastPhyInfo_.wlock() = updateAllPhyInfoImpl();
+    }
+  }
+
+  这个函数调用后 getAllPhyInfo() 返回的是 lastPhyInfo_ 的缓存副本。如果两次周期调用间隔小于
+  FLAGS_update_phy_info_interval_s，updateAllPhyInfoImpl() 根本不会执行，返回的还是旧缓存。
+
+  所以在最坏情况下：fullyConfigured 刚好在上次 updateAllPhyInfo 节流窗口中间完成，需要等到下一个 FLAGS_update_phy_info_interval_s
+  窗口才能实际采集到数据，然后 xphySnapshotManager_ 才被 updateXphyInfo 填充。
+
+  你这个测试的重试窗口是 24 * 5s = 120s。你这两个 flag 的值分别是多少？
+
+✻ Baked for 59s
+
+❯ 应该是默认值。期望xphyinfo会是什么样的？
+
+  Searched for 2 patterns (ctrl+o to expand)
+
+● 两个默认值都是 10 秒：
+  - FLAGS_xphy_stats_loop_interval = 10s（qsfp_service 周期）
+  - FLAGS_update_phy_info_interval_s = 10s（HwSwitch 节流）
+
+  测试重试 24 * 5s = 120s，采集周期才 10s，所以时间上是绝对充裕的。问题不是延迟，是数据根本没被采集到。
+
+  ---
+  关于 xphy info 的内容，让我看一下 PhyInfo 的结构。
+
+  Searched for 2 patterns, read 1 file (ctrl+o to expand)
+
+● XPHY PhyInfo 结构概要
+
+  PhyInfo
+  ├── state: PhyState
+  │   ├── phyChip (type=XPHY)
+  │   ├── name (port name)
+  │   ├── speed, linkState
+  │   ├── timeCollected
+  │   ├── line: PhySideState         ← LINE side（必须有）
+  │   │   ├── side = LINE
+  │   │   ├── pmd: PmdState          ← per-lane CDR lock 等
+  │   │   ├── pcs: PcsState          ← FEC 对齐状态
+  │   │   └── interfaceType, medium
+  │   └── system: PhySideState       ← SYSTEM side（XPHY 专有，可选）
+  │       ├── side = SYSTEM
+  │       ├── pmd: PmdState
+  │       └── ...
+  └── stats: PhyStats
+      ├── line: PhySideStats         ← LINE side PMD stats
+      │   ├── pmd: PmdStats          ← per-lane SNR, eye diagram
+      │   └── pcs: PcsStats          ← rsFec (corrected/uncorrected codewords)
+      └── system: PhySideStats       ← SYSTEM side（XPHY 专有，可选）
+
+  XPHY vs IPHY 的关键区别就是 XPHY 多了 system side（连接 NPU 的一侧），line side 连对端设备。IPHY 只有 line side。
+
+  ---
+  回到你的问题，默认值都是 10s，120s 窗口足够采集十几次。数据一直没出现说明采集链路里某个环节根本就没把 eth1/3/1 纳入。
+  下一步可以帮你看看 SaiPhyManager 的 saiPlatforms_ 是怎么填充的，以及 getPortExternalPhyID 的判断逻辑——确认这个端口是否真的应该有
+   xphy info，以及它所归属的 xphy HwSwitch 是不是在正常采集。
+
+✻ Baked for 1m 1s
+
+❯ xphyinfo是从哪里拿到的，应该这个测试要起qsfp_service, fboss_hw_agent-sai_impl(2个，一个npu
+unit一个),还有fsdb,最后就是sai_multi_link_test-sai_impl，
+
+● 让我梳理一下这个多进程架构下的 xphy info 数据流。
+
+  Searched for 7 patterns, read 4 files (ctrl+o to expand)
+
+● 现在我搞清楚了完整的架构。关键发现：xphy info 来自 qsfp_service 进程内部的 SaiSwitch，不是来自 fboss_hw_agent。
+
+  架构梳理
+
+  qsfp_service 进程                          fboss_hw_agent 进程 (x2)
+  ┌─────────────────────────────────┐       ┌──────────────────────┐
+  │ SaiPhyManager                   │       │ SaiSwitch (NPU ASIC) │
+  │ └── saiPlatforms_               │       │  → IPHY info         │
+  │     └── PIM0                    │       └──────────────────────┘
+  │         ├── XPHY0 (retimer chip)│       ┌──────────────────────┐
+  │         │   └── SaiPhyPlatform  │       │ SaiSwitch (NPU ASIC) │
+  │         │       └── SaiSwitch   │       │  → IPHY info         │
+  │         │           └── ports[] │       └──────────────────────┘
+  │         ├── XPHY1
+  │         └── ...
+  │ └── xphySnapshotManager_
+  │     └── snapshots_[portID] ←── updateXphyInfo()
+  └─────────────────────────────────┘
+            ↑ Thrift: getXphyInfo(port)
+       sai_multi_link_test
+
+  每个 XPHY retimer 芯片在 qsfp_service 内部都有一个独立的 SaiPhyPlatform → SaiSwitch 实例（SaiPhyManager.h:178-208），它直接操作
+  SAI SDK。fboss_hw_agent 负责的是 NPU ASIC 的 IPHY。
+
+  数据采集链路
+
+  周期调度 (10s)
+    → SaiPhyManager::updateAllXphyPortsStats()
+      → for each xphy: collectXphyStats(xphyID, platformInfo)
+        → isFullyConfigured()?  ← 检查点 1
+        → SaiSwitch::updateAllPhyInfo()  ← 节流 10s，检查点 2
+          → updateAllPhyInfoLocked()
+            → for each port in portManager:
+                收集 PMD/PCS/FEC 信息 → 写入 returnPhyParams
+        → SaiSwitch::getAllPhyInfo()  ← 返回 lastPhyInfo_ 缓存
+        → for each port: updateXphyInfo(portId, phyInfo)
+          → xphySnapshotManager_->updatePhyInfo()
+
+  测试调用路径:
+    getXphyInfo(port) → Thrift → qsfp_service
+      → PhyManager::getXphyInfo(port)
+        → xphySnapshotManager_->getPhyInfo(port)  ← 查 snapshots_ map
+
+  可能的问题点
+
+  数据流里有两个关键检查点：
+
+  1. isFullyConfigured() — SaiPhyManager.cpp:115-120，如果 xphy 的 SaiSwitch 未 fully configured，直接 skip
+  2. updateAllPhyInfo() 节流 — HwSwitch.cpp:235，两次 updateAllPhyInfoImpl() 调用至少间隔 10s
+
+  既然默认值都是 10s 且测试窗口有 120s，端口 eth1/3/1 所属的 xphy chip 的采集应该是跑了多次的。如果数据始终为空，大概率是：
+
+  - 该 xphy 的 isFullyConfigured() 一直返回 false（比如 phy retimer 初始化未完成）
+  - getAllPhyInfo() 返回的结果里确实没有这个端口（该 xphy 的 SaiSwitch portManager 里没有 eth1/3/1）
+
+  你能在 qsfp_service 日志里搜一下 Skipping xphy stats collection 和 eth1/3/1 吗？这样可以确认是哪个检查点卡住了。
+
+✻ Crunched for 2m 9s
+
+❯ 所以updateXphyInfo要从硬件sdk（也就是PAI)来得到xphyInfo吗？
+
+● 是的。来看 SaiSwitch::updateAllPhyInfoLocked() 具体怎么从硬件读数据的：
+
+  Read 1 file (ctrl+o to expand)
+
+● 对，updatePmdInfo 通过 SAI API 直接从硬件读取：
+
+  SaiSwitch::updateAllPhyInfoLocked()
+    for each port in portManager:
+      updatePmdInfo()
+        → SAI API: getPortEyeValues()     ← 读眼图
+        → SAI API: HwLaneList / getNumPmdLanes()
+        → serdes attributes               ← 读 CDR lock、SNR 等
+      updatePcsInfo()
+        → SAI API: FEC codewords/bits    ← 读 FEC 计数
+      updateRsInfo()
+
+  所以链路是：
+
+  retimer 芯片硬件寄存器
+    → SAI SDK (PAI)
+      → SaiSwitch (qsfp_service 内部，每个 retimer 一个实例)
+        → updateAllPhyInfoLocked()
+          → returnPhyParams[portID]
+        → lastPhyInfo_
+      → getAllPhyInfo()
+    → updateXphyInfo()
+      → xphySnapshotManager_
+        → getXphyInfo() ← 测试通过 Thrift 调用
+
+  每个 retimer 芯片在 qsfp_service 内部有一个独立的 SaiSwitch 实例，它的 portManager 里管理的是经过该 retimer 的端口。eth1/3/1 的
+  xphy info 最终来自它所属 retimer 芯片的 SAI 硬件寄存器读取。
+
+  所以要排查的话，关键在于确认 eth1/3/1 所属的那个 retimer 芯片的 SaiSwitch 是否被正常初始化、isFullyConfigured() 是否为 true。
+
+✻ Sautéed for 44s
+
+❯ 那具体是哪个api来得到xphyinfo的数据呢，会不会是这里有缺失？
+
+● 让我仔细看 updatePmdInfo 具体调了哪些 SAI API。
+
+  Searched for 6 patterns, read 1 file (ctrl+o to expand)
+
+● 关键 SAI API 如下，全部在 SaiSwitch::updateAllPhyInfoLocked() → updatePmdInfo() 中：
+
+  // 1. Eye 眼图 (行 2457)
+  SaiApiTable::getInstance()->portApi().getAttribute(saiPortId, PortEyeValues{})
+
+  // 2. Signal Detect + CDR Lock (行 2496-2538, SAI >= 1.10.3)
+  portManager.getRxSignalDetect(port->adapterKey(), numPmdLanes, portID)
+  portManager.getRxLockStatus(port->adapterKey(), numPmdLanes, portID)
+
+  // 3. SNR + PPM (行 2541-2569, SAI >= 1.13.0)
+  portManager.getRxPPM(port->adapterKey(), numPmdLanes)
+  portManager.getRxSNR(port->adapterKey(), numPmdLanes)
+
+  // 4. Serdes Parameters (行 2573-2577, 仅 readSerdesParams=true)
+  portManager.getSerdesParameters(serdes->adapterKey(), portID, numPmdLanes)
+  portManager.getTxSettings(serdes->adapterKey(), portID, numPmdLanes)
+
+  这些都是标准的 SAI port API，不太可能缺失。真正的问题不是 API 层面，而是在此之前——
+
+  SaiPhyManager::collectXphyStats() 有个重要细节（行 121-122）：
+
+  platformInfo->getHwSwitch()->updateStats();       // ← 这个没有节流，每次调
+  platformInfo->getHwSwitch()->updateAllPhyInfo();  // ← 这个有 10s 节流！
+  auto phyInfos = platformInfo->getHwSwitch()->getAllPhyInfo();
+
+  updateAllPhyInfo() 和 getAllPhyInfo() 的调用对象是 xphy retimer 芯片自己的 SaiSwitch，它的 updateAllPhyInfoImpl() 内部：
+
+  for (const auto& portIdAndHandle : managerTable_->portManager()) {
+      // 只处理 INTERFACE_PORT / FABRIC_PORT / MANAGEMENT_PORT / HYPER_PORT_MEMBER
+
+  遍历的是这个 retimer 的 SaiSwitch 的 portManager。 如果 portManager 为空（端口还没被 programOnePort() 编程到该 retimer），那
+  returnPhyParams 就是空的，getAllPhyInfo() 返回空 map，后续 updateXphyInfo 永远不会被调用。
+
+  所以 root cause 很可能不是 SAI API 缺失，而是：
+  1. retimer 的 isFullyConfigured() 为 false → 整个 collectXphyStats 直接 skip
+  2. retimer 的 portManager 里根本没有端口 → getAllPhyInfo() 返回空 map
+
+  你能在 qsfp_service 日志里确认一下 eth1/3/1 所属 retimer 的初始化状态？搜 Skipping xphy stats collection 和 programOnePort
+  相关的日志。
+
+✻ Sautéed for 2m 7s
+
+❯ 能在updateAllPhyInfoImpl内加些log来确认是哪一步没有完成？
+
+● 好，让我找到合适的位置加 log。先重新看一下 updateAllPhyInfoLocked 的完整逻辑。
+
+  Read 1 file (ctrl+o to expand)
+
+● 在这里加 log，覆盖所有关键检查点：
+
+● Update(fboss/agent/hw/sai/switch/SaiSwitch.cpp)
+  ⎿  User rejected update to fboss/agent/hw/sai/switch/SaiSwitch.cpp
+      2309      lastSerdesParamsReadTime_ = now.count();
+      2310    }
+      2311
+      2312 +  XLOG(INFO) << "[xphy_debug] updateAllPhyInfoLocked: switchId="
+      2313 +             << getSaiSwitchId() << " totalPortsInMgr="
+      2314 +             << std::distance(
+      2315 +                    managerTable_->portManager().begin(),
+      2316 +                    managerTable_->portManager().end());
+      2317 +
+      2318    for (const auto& portIdAndHandle : managerTable_->portManager()) {
+      2319      PortID portID = portIdAndHandle.first;
+      2314 -    if (portManager.getPortType(portID) == cfg::PortType::INTERFACE_PORT ||
+      2315 -        portManager.getPortType(portID) == cfg::PortType::FABRIC_PORT ||
+      2316 -        portManager.getPortType(portID) == cfg::PortType::MANAGEMENT_PORT ||
+      2317 -        portManager.getPortType(portID) == cfg::PortType::HYPER_PORT_MEMBER) {
+      2320 +    auto portType = portManager.getPortType(portID);
+      2321 +    if (portType == cfg::PortType::INTERFACE_PORT ||
+      2322 +        portType == cfg::PortType::FABRIC_PORT ||
+      2323 +        portType == cfg::PortType::MANAGEMENT_PORT ||
+      2324 +        portType == cfg::PortType::HYPER_PORT_MEMBER) {
+      2325        auto portHandle = portIdAndHandle.second.get();
+      2326        if (portHandle == nullptr) {
+      2320 -        XLOG(DBG3) << "PortHandle not found for port "
+      2321 -                   << static_cast<int>(portID);
+      2327 +        XLOG(WARN) << "[xphy_debug] PortHandle null for port " << portID;
+      2328          continue;
+      2329        }
+      2330
+      2331        auto fb303PortStat = portManager.getLastPortStat(portID);
+      2332        if (fb303PortStat == nullptr) {
+      2327 -        XLOG(DBG3) << "fb303PortStat not found for port "
+      2328 -                   << static_cast<int>(portID);
+      2333 +        XLOG(WARN) << "[xphy_debug] fb303PortStat null for port " << portID;
+      2334          continue;
+      2335        }
+      2336
+
+❯ 用INFO level来打印好了
+
+  Read 1 file (ctrl+o to expand)
+
+● 现在加上 log，覆盖每个关键检查点：
+
+● Update(fboss/agent/hw/sai/switch/SaiSwitch.cpp)
+  ⎿  Added 15 lines, removed 8 lines
+      2309      lastSerdesParamsReadTime_ = now.count();
+      2310    }
+      2311
+      2312 +  size_t totalPortsInMgr = std::distance(
+      2313 +      managerTable_->portManager().begin(),
+      2314 +      managerTable_->portManager().end());
+      2315 +  XLOG(INFO) << "[xphy_debug] updateAllPhyInfoLocked: switchId="
+      2316 +             << getSaiSwitchId() << " totalPortsInMgr=" << totalPortsInMgr;
+      2317 +
+      2318    for (const auto& portIdAndHandle : managerTable_->portManager()) {
+      2319      PortID portID = portIdAndHandle.first;
+      2314 -    if (portManager.getPortType(portID) == cfg::PortType::INTERFACE_PORT ||
+      2315 -        portManager.getPortType(portID) == cfg::PortType::FABRIC_PORT ||
+      2316 -        portManager.getPortType(portID) == cfg::PortType::MANAGEMENT_PORT ||
+      2317 -        portManager.getPortType(portID) == cfg::PortType::HYPER_PORT_MEMBER) {
+      2320 +    auto portType = portManager.getPortType(portID);
+      2321 +    if (portType == cfg::PortType::INTERFACE_PORT ||
+      2322 +        portType == cfg::PortType::FABRIC_PORT ||
+      2323 +        portType == cfg::PortType::MANAGEMENT_PORT ||
+      2324 +        portType == cfg::PortType::HYPER_PORT_MEMBER) {
+      2325        auto portHandle = portIdAndHandle.second.get();
+      2326        if (portHandle == nullptr) {
+      2320 -        XLOG(DBG3) << "PortHandle not found for port "
+      2321 -                   << static_cast<int>(portID);
+      2327 +        XLOG(INFO) << "[xphy_debug] PortHandle null for port " << portID;
+      2328          continue;
+      2329        }
+      2330
+      2331        auto fb303PortStat = portManager.getLastPortStat(portID);
+      2332        if (fb303PortStat == nullptr) {
+      2327 -        XLOG(DBG3) << "fb303PortStat not found for port "
+      2328 -                   << static_cast<int>(portID);
+      2333 +        XLOG(INFO) << "[xphy_debug] fb303PortStat null for port " << portID;
+      2334          continue;
+      2335        }
+      2336 +      XLOG(INFO) << "[xphy_debug] processing port " << portID << " name="
+      2337 +                 << fb303PortStat->portName();
+      2338
+      2339        phy::PhyInfo lastPhyInfo;
+      2340        if (auto itr = lastPhyInfos_.find(portID); itr != lastPhyInfos_.end()) {
+
+● Now add a log when each port is successfully added and a final summary:
+
+● Update(fboss/agent/hw/sai/switch/SaiSwitch.cpp)
+  ⎿  Added 8 lines
+      2429        phyParams.state()->timeCollected() = now.count();
+      2430        phyParams.stats()->timeCollected() = now.count();
+      2431        returnPhyParams[portID] = phyParams;
+      2432 +      XLOG(INFO) << "[xphy_debug] port " << portID << " ("
+      2433 +                 << *fb303PortStat->portName()
+      2434 +                 << ") DONE, isXphy=" << isXphy;
+      2435 +    } else {
+      2436 +      XLOG(INFO) << "[xphy_debug] skip port " << portID
+      2437 +                 << " wrong type=" << apache::thrift::util::enumNameSafe(portType);
+      2438      }
+      2439    }
+      2440 +  XLOG(INFO) << "[xphy_debug] updateAllPhyInfoLocked DONE: switchId="
+      2441 +             << getSaiSwitchId() << " resultPorts=" << returnPhyParams.size();
+      2442    lastPhyInfos_ = returnPhyParams;
+      2443    return returnPhyParams;
+      2444  }
+
+● 再给 collectXphyStats 和 HwSwitch::updateAllPhyInfo 加 log：
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(fboss/lib/phy/SaiPhyManager.cpp)
+  ⎿  Added 13 lines, removed 10 lines
+      112      GlobalXphyID xphyID,
+      113      PlatformInfo* platformInfo) {
+      114    try {
+      115 -    if (!platformInfo->getHwSwitch() ||
+      116 -        !platformInfo->getHwSwitch()->isFullyConfigured()) {
+      117 -      XLOG(WARN) << "Skipping xphy stats collection for xphy " << xphyID
+      118 -                 << " as it's not fully configured";
+      115 +    auto* hwSwitch = platformInfo->getHwSwitch();
+      116 +    if (!hwSwitch || !hwSwitch->isFullyConfigured()) {
+      117 +      XLOG(INFO) << "[xphy_debug] collectXphyStats SKIP xphy=" << xphyID
+      118 +                 << " hasHw=" << (hwSwitch != nullptr)
+      119 +                 << " configured=" << (hwSwitch ? hwSwitch->isFullyConfigured() : false);
+      120        return;
+      121      }
+      121 -    platformInfo->getHwSwitch()->updateStats();
+      122 -    platformInfo->getHwSwitch()->updateAllPhyInfo();
+      123 -    auto phyInfos = platformInfo->getHwSwitch()->getAllPhyInfo();
+      122 +    hwSwitch->updateStats();
+      123 +    hwSwitch->updateAllPhyInfo();
+      124 +    auto phyInfos = hwSwitch->getAllPhyInfo();
+      125 +    XLOG(INFO) << "[xphy_debug] collectXphyStats xphy=" << xphyID
+      126 +               << " switchId=" << hwSwitch->getSaiSwitchId()
+      127 +               << " phyInfoCount=" << phyInfos.size();
+      128      for (auto& [portId, phyInfo] : phyInfos) {
+      129        updateXphyInfo(portId, std::move(phyInfo));
+      130      }
+      131    } catch (const std::exception& e) {
+      128 -    XLOG(INFO) << "Stats collection failed on : " << "switch: "
+      129 -               << platformInfo->getHwSwitch()->getSaiSwitchId()
+      130 -               << " xphy: " << xphyID << " error: " << e.what();
+      132 +    XLOG(INFO) << "[xphy_debug] collectXphyStats FAILED xphy=" << xphyID
+      133 +               << " error=" << e.what();
+      134    }
+      135  }
+      136
+
+● 最后给 HwSwitch::updateAllPhyInfo 的节流点加 log：
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(fboss/agent/HwSwitch.cpp)
+  ⎿  Added 7 lines
+      233    auto now =
+      234        std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      235    if (now - phyInfoUpdateTime_ >= FLAGS_update_phy_info_interval_s) {
+      236 +    XLOG(INFO) << "[xphy_debug] HwSwitch::updateAllPhyInfo: RUNNING impl, "
+      237 +               << "interval=" << FLAGS_update_phy_info_interval_s
+      238 +               << " elapsed=" << (now - phyInfoUpdateTime_);
+      239      phyInfoUpdateTime_ = now;
+      240      try {
+      241        *lastPhyInfo_.wlock() = updateAllPhyInfoImpl();
+     ...
+      244        XLOG(ERR) << "Error running updateAllPhyInfo: "
+      245                  << folly::exceptionStr(ex);
+      246      }
+      247 +  } else {
+      248 +    XLOG(INFO) << "[xphy_debug] HwSwitch::updateAllPhyInfo: THROTTLED, "
+      249 +               << "elapsed=" << (now - phyInfoUpdateTime_)
+      250 +               << " interval=" << FLAGS_update_phy_info_interval_s;
+      251    }
+      252  }
+      253
+
+● 看一下所有修改点，确认正确：
+
+● Bash(git diff fboss/agent/hw/sai/switch/SaiSwitch.cpp fboss/lib/phy/SaiPhyManager.cpp fboss/agent/HwSwitch.cpp)
+  ⎿  diff --git a/fboss/agent/HwSwitch.cpp b/fboss/agent/HwSwitch.cpp
+     index b45a9333dc..334654524e 100644
+     --- a/fboss/agent/HwSwitch.cpp
+     … +47 lines (ctrl+o to expand)
+
+● 改好了，三个文件各加了关键检查点的 log。汇总一下输出内容：
+
+  ┌───────────────────────────────────┬────────────────────────────┬─────────────────────────────────────┐
+  │               位置                │           关键词           │                说明                 │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ HwSwitch::updateAllPhyInfo        │ RUNNING impl / THROTTLED   │ 是否节流跳过，显示 elapsed/interval │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ SaiSwitch::updateAllPhyInfoLocked │ totalPortsInMgr            │ 入口：portManager 里总端口数        │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ skip port X wrong type=    │ 端口类型不匹配，被过滤掉            │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ PortHandle null            │ portHandle 为空                     │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ fb303PortStat null         │ fb303 stat 为空                     │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ processing port X name=Y   │ 端口通过所有检查，开始采集          │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ port X (name) DONE isXphy= │ 端口采集完成，加入结果              │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ resultPorts=               │ 最终结果里有多少个端口              │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ SaiPhyManager::collectXphyStats   │ SKIP                       │ hwSwitch 为空或 not configured      │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ phyInfoCount=              │ getAllPhyInfo 返回几条数据          │
+  ├───────────────────────────────────┼────────────────────────────┼─────────────────────────────────────┤
+  │ 同上                              │ FAILED                     │ 异常捕获                            │
+  └───────────────────────────────────┴────────────────────────────┴─────────────────────────────────────┘
+
+  搜 [xphy_debug] 看 qsfp_service 日志就行。
+
